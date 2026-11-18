@@ -1,6 +1,7 @@
 import json
 
 from app.db import FIXTURES_DIR, connect
+from app.modules.idle_timeout_cut import place_hit
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS settings (
@@ -58,6 +59,19 @@ CREATE TABLE IF NOT EXISTS session_proofs (
   ended_at TEXT,
   created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS idle_cut_edges (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  visitor_id TEXT NOT NULL,
+  old_session_id TEXT NOT NULL,
+  new_session_id TEXT NOT NULL,
+  gap_sec INTEGER NOT NULL,
+  idle_timeout_sec INTEGER NOT NULL,
+  trigger_hit_id TEXT NOT NULL,
+  trigger_ts TEXT NOT NULL,
+  reason TEXT NOT NULL DEFAULT 'idle_timeout',
+  created_at TEXT NOT NULL
+);
 """
 
 
@@ -87,60 +101,22 @@ def _seed_fixtures(conn):
             "INSERT INTO visitors(id, label, created_at) VALUES (?,?,?)",
             (v["id"], v["label"], v["created_at"]),
         )
-    # 基座：按访客整段落进一个 open 会话（超时切分留给功能题空桩）
-    for visitor_id, group in _group_hits(data.get("hits", [])).items():
-        group = sorted(group, key=lambda h: (h["event_ts"], h["id"]))
-        sid = f"S-{visitor_id}-1"
-        conn.execute(
-            "INSERT INTO sessions(id, visitor_id, started_at, ended_at, hit_count, status) VALUES (?,?,?,?,?,?)",
-            (
-                sid,
-                visitor_id,
-                group[0]["event_ts"],
-                group[-1]["event_ts"],
-                len(group),
-                "open",
-            ),
-        )
-        hit_ids = []
-        for h in group:
-            conn.execute(
-                """
-                INSERT INTO hits(id, visitor_id, session_id, event_ts, page_path, event_name, channel)
-                VALUES (?,?,?,?,?,?,?)
-                """,
-                (
-                    h["id"],
-                    visitor_id,
-                    sid,
-                    h["event_ts"],
-                    h["page_path"],
-                    h["event_name"],
-                    h.get("channel", "primary"),
-                ),
-            )
-            hit_ids.append(h["id"])
-        conn.execute(
-            """
-            INSERT INTO session_proofs(session_id, visitor_id, hit_ids_json, hit_count, started_at, ended_at, created_at)
-            VALUES (?,?,?,?,?,?,datetime('now'))
-            """,
-            (
-                sid,
-                visitor_id,
-                json.dumps(hit_ids, ensure_ascii=False),
-                len(hit_ids),
-                group[0]["event_ts"],
-                group[-1]["event_ts"],
-            ),
-        )
-
-
-def _group_hits(hits):
-    out = {}
+    # 物化与收流同源：按 event_ts 顺序逐点走空闲超时裁决，
+    # 超间隙即同事务关旧 / 开新 / 写切分边表与会话核证。
+    timeout_sec = idle_timeout_sec(conn)
+    hits = sorted(data.get("hits", []), key=lambda h: (h["event_ts"], h["id"]))
     for h in hits:
-        out.setdefault(h["visitor_id"], []).append(h)
-    return out
+        place_hit(
+            conn,
+            {
+                "id": h["id"],
+                "visitor_id": h["visitor_id"],
+                "event_ts": h["event_ts"],
+                "page_path": h["page_path"],
+                "event_name": h["event_name"],
+            },
+            timeout_sec=timeout_sec,
+        )
 
 
 def idle_timeout_sec(conn) -> int:

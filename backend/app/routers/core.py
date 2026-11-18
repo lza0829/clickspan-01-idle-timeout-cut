@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException
 
 from app.db import connect
+from app.modules.idle_timeout_cut import list_cut_edges
 from app.seed import idle_timeout_sec
 from app.services import ingest as ingest_svc
 from app.services import sessions as sess_svc
@@ -19,6 +20,9 @@ def overview():
                 "SELECT COUNT(*) AS c FROM hits WHERE channel='primary'"
             ).fetchone()["c"],
             "quarantine": conn.execute("SELECT COUNT(*) AS c FROM quarantine").fetchone()["c"],
+            "idle_cut_edges": conn.execute(
+                "SELECT COUNT(*) AS c FROM idle_cut_edges"
+            ).fetchone()["c"],
             "idle_timeout_sec": idle_timeout_sec(conn),
         }
     finally:
@@ -93,6 +97,16 @@ def session_proofs(session_id: str | None = None):
         conn.close()
 
 
+@router.get("/idle-cut-edges")
+def idle_cut_edges(visitor_id: str | None = None):
+    """切窗核证只读接口：访客、旧/新会话、间隙、超时、触发键。"""
+    conn = connect()
+    try:
+        return list_cut_edges(conn, visitor_id)
+    finally:
+        conn.close()
+
+
 @router.get("/settings")
 def get_settings():
     conn = connect()
@@ -114,6 +128,9 @@ def put_idle_timeout(body: dict):
             (str(sec),),
         )
         conn.commit()
-        return {"idle_timeout_sec": sec}
+        return {
+            "idle_timeout_sec": sec,
+            "note": "新超时仅裁决后续收流；已 closed 会话与既有切分边表不回溯重写",
+        }
     finally:
         conn.close()

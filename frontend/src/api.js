@@ -21,5 +21,7 @@ export const api = {
   ingest: () => req('/api/ingest/run', { method: 'POST' }),
   proofs: (sessionId) =>
     req(sessionId ? `/api/session-proofs?session_id=${encodeURIComponent(sessionId)}` : '/api/session-proofs'),
+  idleCutEdges: (visitorId) =>
+    req(visitorId ? `/api/idle-cut-edges?visitor_id=${encodeURIComponent(visitorId)}` : '/api/idle-cut-edges'),
   settings: () => req('/api/settings'),
 }

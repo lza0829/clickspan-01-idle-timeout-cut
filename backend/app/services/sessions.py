@@ -34,8 +34,17 @@ def session_detail(conn, session_id: str):
         "SELECT * FROM session_proofs WHERE session_id=? ORDER BY id DESC LIMIT 1",
         (session_id,),
     ).fetchone()
+    cut_in = conn.execute(
+        "SELECT * FROM idle_cut_edges WHERE new_session_id=?",
+        (session_id,),
+    ).fetchall()
+    cut_out = conn.execute(
+        "SELECT * FROM idle_cut_edges WHERE old_session_id=?",
+        (session_id,),
+    ).fetchall()
     return {
         "session": dict(sess),
         "hits": [dict(h) for h in hits],
         "proof": dict(proof) if proof else None,
+        "cut_edges": [dict(r) for r in (*cut_out, *cut_in)],
     }
